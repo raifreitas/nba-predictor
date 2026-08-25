@@ -1,0 +1,88 @@
+name: Runner NBA (picks + web + telegram)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: runner-nba
+  cancel-in-progress: false
+
+jobs:
+  runner:
+    runs-on: ubuntu-latest
+    env:
+      NBA_SQLITE: '1'
+      NBA_MODO_OBSERVACION: '0'
+      THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    outputs:
+      changed: ${{ env.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Respaldo matinal si el ETL no corrio
+        id: respaldo
+        run: |
+          FALTA=$(python src/EtlPython/respaldo_matinal.py | grep -o '[01]$')
+          echo "FALTA=$FALTA"
+          if [ "$FALTA" = "1" ]; then
+            AYER=$(date -u -d "yesterday" +%F)
+            HOY=$(date -u +%F)
+            python src/EtlPython/etl_main.py "$AYER" "$HOY"
+            python src/EtlPython/etl_main.py --solo-odds "$HOY" "$HOY"
+            python src/Modeling/verificar_predicciones.py
+            python src/Modeling/entrenar_modelo.py
+          fi
+
+      - name: Planificador (ventana pre-juego)
+        run: python src/Modeling/planificador.py --procesar --ventana-min 30 --horizonte-max-min 120
+
+      - name: Notificar Telegram
+        run: python src/Modeling/notificar_picks.py
+
+      - name: Generar web
+        id: web
+        run: |
+          python src/Modeling/generar_web.py
+          if [ -n "$(git status --porcelain web/data.json)" ]; then
+            echo "changed=1" >> $GITHUB_ENV
+          fi
+
+      - name: Commit y push
+        if: env.changed == '1'
+        run: |
+          git config user.name "nba-bot"
+          git config user.email "actions@github.com"
+          git add data/ models/ web/data.json
+          git commit -m "runner $(date -u +%F-%H:%M)"
+          git push
+
+  deploy-pages:
+    needs: runner
+    if: needs.runner.outputs.changed == '1'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

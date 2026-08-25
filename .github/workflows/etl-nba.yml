@@ -1,0 +1,62 @@
+name: ETL NBA diario
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+    - cron: '30 16 * * *'
+    - cron: '0 21 * * *'
+    - cron: '0 0 * * *'
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: etl-nba
+  cancel-in-progress: false
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+    env:
+      NBA_SQLITE: '1'
+      THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Matinal completo (solo primer cron del dia)
+        if: github.event.schedule == '0 12 * * *'
+        run: |
+          AYER=$(date -u -d "yesterday" +%F)
+          HOY=$(date -u +%F)
+          python src/EtlPython/etl_main.py "$AYER" "$HOY"
+          python src/Modeling/verificar_predicciones.py --fecha "$AYER"
+          python src/EtlPython/etl_main.py --solo-odds "$HOY" "$HOY"
+          python src/Modeling/entrenar_modelo.py
+
+      - name: Snapshot de cuotas (resto de crons)
+        if: github.event.schedule != '0 12 * * *'
+        run: |
+          HOY=$(date -u +%F)
+          python src/EtlPython/etl_main.py --solo-odds "$HOY" "$HOY"
+          python src/Modeling/verificar_predicciones.py
+
+      - name: Commit y push si hubo cambios
+        run: |
+          git config user.name "nba-bot"
+          git config user.email "actions@github.com"
+          git add data/ models/
+          if git diff --cached --quiet; then
+            echo "Sin cambios"
+          else
+            git commit -m "ETL $(date -u +%F-%H:%M) [skip ci]"
+            git push
+          fi

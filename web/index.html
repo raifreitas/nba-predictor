@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pronosticos NBA — Over/Under</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  :root{--fondo:#101018;--panel:#181826;--borde:#2a2a3c;--texto:#e8e8f0;--apagado:#9a9ab0;
+        --verde:#4ade80;--rojo:#f87171;--ambar:#fbbf24;--naranja:#e8622c}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--fondo);color:var(--texto);font-family:'Segoe UI',system-ui,sans-serif;padding:24px}
+  .contenedor{max-width:1100px;margin:0 auto}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+  header img{width:42px;height:42px}
+  h1{font-size:1.5rem;font-weight:700}
+  h1 span{color:var(--naranja)}
+  .actualizado{margin-left:auto;color:var(--apagado);font-size:.85rem}
+  .tarjetas{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px}
+  .tarjeta{background:var(--panel);border:1px solid var(--borde);border-radius:10px;
+           padding:14px 20px;min-width:120px;text-align:center}
+  .tarjeta .num{font-size:1.7rem;font-weight:700}
+  .tarjeta .lbl{color:var(--apagado);font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
+  .verde{color:var(--verde)} .rojo{color:var(--rojo)} .ambar{color:var(--ambar)}
+  section{margin-bottom:30px}
+  h2{font-size:1.05rem;margin-bottom:10px;color:var(--texto);border-left:3px solid var(--naranja);padding-left:10px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:10px;overflow:hidden;font-size:.88rem}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--borde)}
+  th{color:var(--apagado);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;background:#14141e}
+  tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .estado-GANADA{color:var(--verde);font-weight:600} .estado-PERDIDA{color:var(--rojo);font-weight:600}
+  .estado-PENDIENTE{color:var(--ambar)} .estado-PUSH,.estado-NO_VALIDA{color:var(--apagado)}
+  .vacio{color:var(--apagado);padding:16px;background:var(--panel);border-radius:10px;text-align:center}
+  footer{margin-top:34px;color:var(--apagado);font-size:.75rem;text-align:center;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="contenedor">
+  <header>
+    <img src="favicon.svg" alt="logo">
+    <h1>Pronósticos <span>NBA</span> · Over/Under</h1>
+    <div class="actualizado" id="actualizado"></div>
+  </header>
+
+  <div class="tarjetas" id="tarjetas"></div>
+
+  <section>
+    <h2>Picks</h2>
+    <div id="tabla-picks"></div>
+  </section>
+
+  <section>
+    <h2>Descartados (no se apostó)</h2>
+    <div id="tabla-descartados"></div>
+  </section>
+
+  <footer>
+    Sistema automático de pronósticos O/U NBA. El edge se muestra en PUNTOS
+    (proyección − línea). Registro honesto: incluye pérdidas y descartes.
+    No es consejo financiero.
+  </footer>
+</div>
+
+<script>
+const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—' : v;
+const pct = v => (v === null || v === undefined) ? '—' : (100*v).toFixed(1)+'%';
+
+function tabla(contenido, columnas){
+  if(!contenido.length) return '<div class="vacio">Sin registros todavía</div>';
+  const head = columnas.map(c=>`<th class="${c.num?'num':''}">${c.t}</th>`).join('');
+  const filas = contenido.map(r=>'<tr>'+columnas.map(c=>{
+    let v = c.f ? c.f(r[c.k]) : r[c.k];
+    return `<td class="${c.num?'num':''} ${c.cls?c.cls(r):''}">${v}</td>`;
+  }).join('')+'</tr>').join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${filas}</tbody></table>`;
+}
+
+async function cargar(){
+  try{
+    const d = await fetch('data.json?v='+Date.now()).then(r=>r.json());
+    document.getElementById('actualizado').textContent =
+      d.actualizado ? 'Actualizado: '+d.actualizado.replace('T',' ').replace('Z',' UTC') : '';
+    const r = d.resumen||{};
+    document.getElementById('tarjetas').innerHTML = [
+      ['ganadas','Ganadas','verde'],['perdidas','Perdidas','rojo'],
+      ['push','Push',''], ['pendientes','Pendientes','ambar'],
+      ['efectividad','Efectividad', r.efectividad>=60?'verde':(r.efectividad===null?'':'rojo')]
+    ].map(([k,l,c])=>`<div class="tarjeta"><div class="num ${c}">${k==='efectividad'?(r[k]===null?'—':r[k]+'%'):(r[k]??0)}</div><div class="lbl">${l}</div></div>`).join('');
+
+    document.getElementById('tabla-picks').innerHTML = tabla(d.predicciones||[],[
+      {t:'Fecha',k:'Fecha'},{t:'Partido',k:'Partido'},
+      {t:'Apuesta',k:'',f:r=>`${r.Apuesta} ${fmt(r.Linea)}`},
+      {t:'Unidades',k:'Unidades',num:true},{t:'Edge (pts)',k:'Edge',num:true,
+        f:v=>v===null?'—':(v>0?'+':'')+Number(v).toFixed(1)},
+      {t:'P(Over)',k:'ProbOver',num:true,f:pct},
+      {t:'Cuota',k:'Cuota',num:true,f:fmt},
+      {t:'Resultado',k:'Estado',cls:r=>'estado-'+r.Estado}
+    ]);
+
+    document.getElementById('tabla-descartados').innerHTML = tabla(d.evaluaciones||[],[
+      {t:'Fecha',k:'Fecha'},{t:'Partido',k:'Partido'},{t:'Línea',k:'Linea',num:true,f:fmt},
+      {t:'Predicción',k:'Prediccion',f:v=>v||'—'},
+      {t:'P(Over)',k:'ProbOver',num:true,f:pct},
+      {t:'Proyección',k:'Proyeccion',num:true,f:fmt},
+      {t:'Motivo',k:'Motivo',f:v=>v||'pasó filtros'}
+    ]);
+  }catch(e){
+    document.getElementById('tarjetas').innerHTML =
+      '<div class="vacio">Sin datos aún. El sistema los generará con el primer ETL.</div>';
+  }
+}
+cargar();
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+name: Healthcheck NBA
+
+on:
+  schedule:
+    - cron: '20 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Evaluar estancamiento
+        id: eval
+        run: |
+          read PENDIENTE HORAS <<< $(python3 -c "
+import json, datetime
+pend = 0
+try:
+    estado = json.load(open('data/horarios.json'))
+    dia = estado.get(datetime.datetime.utcnow().strftime('%Y-%m-%d'), {})
+    pend = sum(1 for g, i in dia.items() if i.get('estado') == 'pendiente')
+except Exception:
+    pass
+horas = 999
+try:
+    d = json.load(open('web/data.json'))
+    a = datetime.datetime.strptime(d['actualizado'], '%Y-%m-%dT%H:%M:%SZ')
+    horas = (datetime.datetime.utcnow() - a).total_seconds() / 3600
+except Exception:
+    pass
+print(pend, horas)")
+          echo "pendientes=$PENDIENTE horas=$HORAS"
+          if [ "$PENDIENTE" != "0" ] && [ "$(echo "$HORAS > 4" | bc)" = "1" ]; then
+            echo "disparar=1" >> $GITHUB_OUTPUT
+          else
+            echo "disparar=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Re-disparar runner
+        id: redisparo
+        if: steps.eval.outputs.disparar == '1'
+        continue-on-error: true
+        env:
+          PAT: ${{ secrets.DISPATCH_PAT }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/workflows/runner-nba.yml/dispatches \
+            -f ref=main --header "Authorization: Bearer $PAT"
+
+      - name: Abrir issue si el PAT esta muerto
+        if: steps.eval.outputs.disparar == '1' && steps.redisparo.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "ALERTA: DISPATCH_PAT muerto o vencido" \
+            --body "El healthcheck detecto juegos pendientes y data.json estancado >4h, pero fallo el re-despacho del runner. Revisar: 1) El secret DISPATCH_PAT (PAT clasico con permiso repo/workflow) puede haber expirado. 2) Crear uno nuevo en GitHub -> Settings -> Developer settings -> Personal access tokens. 3) Actualizar el secret y el cron-job.org si usa otro PAT."
